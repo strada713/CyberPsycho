@@ -43,6 +43,11 @@ async fn main() {
     let mut banner = 0.0;
     let boss_music = load_sound("assets/boss.wav").await.unwrap();
     let mut flash = 0.0;
+    let mut dash_left = 0.0;
+    let mut dash_cd = 0.0;
+    let mut dash_dir = vec2(0.0, 0.0);
+    let pickup_sound = load_sound("assets/pick.wav").await.unwrap();
+    let whosh_sound = load_sound("assets/whosh.wav").await.unwrap();
     play_sound(
         &music,
         PlaySoundParams {
@@ -56,13 +61,40 @@ async fn main() {
             clear_background(BLACK);
             let title = "CYBERPSYCHO";
             let sub = "Press ENTER to start";
+            let lines = [
+                "WASD - move",
+                "Mouse aim + LMB - strike",
+                "SPACE - dash",
+                "SHIFT - Sandevistan (uses a blocker)",
+                "Escape - Leave - Menu",
+            ];
+            let mut y = 470.0;
+            for line in lines {
+                let w = measure_text(line, None, 28, 1.0).width;
+                draw_text(line, (screen_width() - w) / 2.0, y, 28.0, DARKGRAY);
+                y += 34.0;
+            }
+            let warn = "No blocker = Cyberpsychosis!";
+            let ww = measure_text(warn, None, 28, 1.0).width;
+            draw_text(warn, (screen_width() - ww) / 2.0, y + 10.0, 28.0, RED);
             let w1 = measure_text(title, None, 90, 1.0).width;
             let w2 = measure_text(sub, None, 40, 1.0).width;
 
+            draw_text(title, (screen_width() - w1) / 2.0, 324.0, 90.0, MAGENTA);
             draw_text(title, (screen_width() - w1) / 2.0, 320.0, 90.0, SKYBLUE);
-            draw_text(sub, (screen_width() - w2) / 2.0, 390.0, 40.0, WHITE);
+            let pulse = 0.5 + 0.5 * (get_time() as f32 * 3.0).sin();
+            draw_text(
+                sub,
+                (screen_width() - w2) / 2.0,
+                390.0,
+                40.0,
+                Color::new(1.0, 1.0, 1.0, pulse),
+            );
             if is_key_pressed(KeyCode::Enter) {
                 state = State::Playing;
+            }
+            if is_key_pressed(KeyCode::Escape) {
+                break;
             }
             next_frame().await;
             continue;
@@ -79,6 +111,12 @@ async fn main() {
         if flash > 0.0 {
             flash -= dt;
         }
+        if dash_left > 0.0 {
+            dash_left -= dt;
+        }
+        if dash_cd > 0.0 {
+            dash_cd -= dt;
+        }
 
         if !blocker_on_map {
             blocker_timer -= dt;
@@ -90,6 +128,7 @@ async fn main() {
         if blocker_on_map && pos.distance(blockers_pos) < 25.0 {
             blockers += 1;
             blocker_on_map = false;
+            play_sound_once(&pickup_sound);
             blocker_timer = 8.0;
         }
         if sandy_left > 0.0 {
@@ -125,6 +164,13 @@ async fn main() {
         }
         let aim = (Vec2::from(mouse_position()) - pos).normalize_or_zero();
         let to_enemy = (enemy - pos).normalize_or_zero();
+        if is_key_pressed(KeyCode::Space) && dash_cd <= 0.0 && !game_over {
+            dash_left = 0.15;
+            dash_cd = 1.5;
+            dash_dir = aim;
+            play_sound_once(&whosh_sound);
+        }
+
         if is_mouse_button_pressed(MouseButton::Left)
             && enemy_alive
             && !boss
@@ -165,7 +211,11 @@ async fn main() {
             }
         }
         if !game_over {
-            pos += dir * speed * get_frame_time();
+            if dash_left > 0.0 {
+                pos += dash_dir * speed * 4.0 * get_frame_time();
+            } else {
+                pos += dir * speed * get_frame_time();
+            }
             pos.x = pos.x.clamp(15.0, screen_width() - 15.0);
             pos.y = pos.y.clamp(15.0, screen_height() - 15.0);
             if enemy_alive {
@@ -182,7 +232,10 @@ async fn main() {
             play_sound_once(&death_sound);
             flash = 0.6;
         }
-        if game_over && is_key_pressed(KeyCode::R) {
+        if game_over && (is_key_pressed(KeyCode::R) || is_key_pressed(KeyCode::Escape)) {
+            if is_key_pressed(KeyCode::Escape) {
+                state = State::Menu;
+            }
             game_over = false;
             pos = start;
             enemy = ememy_start;
@@ -197,6 +250,8 @@ async fn main() {
             stop_sound(&death_sound);
             banner = 0.0;
             stop_sound(&boss_music);
+            dash_left = 0.0;
+            dash_cd = 0.0;
         }
         clear_background(BLACK);
         draw_circle(pos.x, pos.y, 15.0, SKYBLUE);
