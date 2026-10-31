@@ -9,6 +9,11 @@ fn window_conf() -> Conf {
         ..Default::default()
     }
 }
+#[derive(PartialEq)]
+enum State {
+    Menu,
+    Playing,
+}
 #[macroquad::main(window_conf)]
 async fn main() {
     let speed: f32 = 250.0;
@@ -21,6 +26,7 @@ async fn main() {
     let mut enemy_alive = true;
     let mut sandy_left: f32 = 0.0;
     let mut cooldown: f32 = 0.0;
+    let mut state = State::Menu;
     rand::srand(macroquad::miniquad::date::now() as u64);
     let mut blockers: i32 = 0;
     let mut blockers_pos = vec2(0.0, 0.0);
@@ -46,6 +52,21 @@ async fn main() {
     );
 
     loop {
+        if state == State::Menu {
+            clear_background(BLACK);
+            let title = "CYBERPSYCHO";
+            let sub = "Press ENTER to start";
+            let w1 = measure_text(title, None, 90, 1.0).width;
+            let w2 = measure_text(sub, None, 40, 1.0).width;
+
+            draw_text(title, (screen_width() - w1) / 2.0, 320.0, 90.0, SKYBLUE);
+            draw_text(sub, (screen_width() - w2) / 2.0, 390.0, 40.0, WHITE);
+            if is_key_pressed(KeyCode::Enter) {
+                state = State::Playing;
+            }
+            next_frame().await;
+            continue;
+        }
         let mut dir = vec2(0.0, 0.0);
         let enemy_time = if sandy_left > 0.0 { 0.2 } else { 1.0 };
         let dt = get_frame_time();
