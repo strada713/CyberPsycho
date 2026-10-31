@@ -1,3 +1,4 @@
+use macroquad::audio::{PlaySoundParams, load_sound, play_sound, play_sound_once, stop_sound};
 use macroquad::prelude::*;
 fn window_conf() -> Conf {
     Conf {
@@ -29,11 +30,27 @@ async fn main() {
     let mut respawn_timer = 0.0;
     let mut floor = 1;
     let mut floor_kills = 0;
+    let hit_sound = load_sound("assets/hit.wav").await.unwrap();
+    let sandy_sound = load_sound("assets/sandy.wav").await.unwrap();
+    let music = load_sound("assets/music.wav").await.unwrap();
+    let death_sound = load_sound("assets/Death.wav").await.unwrap();
+    let mut bann
+    play_sound(
+        &music,
+        PlaySoundParams {
+            looped: true,
+            volume: 0.4,
+        },
+    );
 
     loop {
         let mut dir = vec2(0.0, 0.0);
         let enemy_time = if sandy_left > 0.0 { 0.2 } else { 1.0 };
         let dt = get_frame_time();
+        let was_over = game_over;
+        let boss = floor >= 10;
+        let enemy_radius = if boss { 45.0 } else { 15.0 };
+
         if !blocker_on_map {
             blocker_timer -= dt;
             if blocker_timer <= 0.0 {
@@ -56,6 +73,7 @@ async fn main() {
             if blockers > 0 {
                 blockers -= 1;
                 sandy_left = 5.0;
+                play_sound_once(&sandy_sound);
                 cooldown = 15.0;
             } else {
                 game_over = true;
@@ -76,17 +94,19 @@ async fn main() {
         if dir != Vec2::ZERO {
             dir = dir.normalize();
         }
-        if is_mouse_button_pressed(MouseButton::Left) && enemy_alive && pos.distance(enemy) < 60.0 {
+        if is_mouse_button_pressed(MouseButton::Left)
+            && enemy_alive
+            && !boss
+            && pos.distance(enemy) < 60.0
+        {
             enemy_alive = false;
             kills += 1;
+            play_sound_once(&hit_sound);
             respawn_timer = 2.0;
             floor_kills += 1;
             if floor_kills >= 10 {
                 floor += 1;
                 floor_kills = 0;
-            }
-            if floor == 10 {
-                let boss = floor >= 10;
             }
         }
         if !enemy_alive && !game_over {
@@ -111,8 +131,11 @@ async fn main() {
                 enemy += to_player * enemy_speed * get_frame_time() * enemy_time;
             }
         }
-        if enemy_alive && pos.distance(enemy) < 30.0 {
+        if enemy_alive && pos.distance(enemy) < 15.0 + enemy_radius {
             game_over = true;
+        }
+        if game_over && !was_over {
+            play_sound_once(&death_sound);
         }
         if game_over && is_key_pressed(KeyCode::R) {
             game_over = false;
@@ -126,6 +149,7 @@ async fn main() {
             floor = 1;
             floor_kills = 0;
             respawn_timer = 0.0;
+            stop_sound(&death_sound);
         }
         clear_background(BLACK);
         draw_circle(pos.x, pos.y, 15.0, SKYBLUE);
@@ -134,7 +158,8 @@ async fn main() {
         draw_rectangle(15.0, 690.0, 200.0 * ready, 12.0, SKYBLUE);
         draw_text("Sandevistan", 20.0, 670.0, 35.0, GREEN);
         if enemy_alive {
-            draw_circle(enemy.x, enemy.y, 15.0, YELLOW);
+            let color = if boss { PURPLE } else { YELLOW };
+            draw_circle(enemy.x, enemy.y, enemy_radius, color);
         }
         if game_over {
             draw_text("Cyberpsychosis", 400.0, 310.0, 60.0, RED);
