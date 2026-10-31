@@ -1,5 +1,6 @@
 use macroquad::audio::{PlaySoundParams, load_sound, play_sound, play_sound_once, stop_sound};
 use macroquad::prelude::*;
+
 fn window_conf() -> Conf {
     Conf {
         window_title: "CyberPsycho".to_owned(),
@@ -9,11 +10,15 @@ fn window_conf() -> Conf {
         ..Default::default()
     }
 }
+
 #[derive(PartialEq)]
 enum State {
     Menu,
+    Controls,
     Playing,
+    Paused,
 }
+
 #[macroquad::main(window_conf)]
 async fn main() {
     let speed: f32 = 250.0;
@@ -21,8 +26,8 @@ async fn main() {
     let start = vec2(640.0, 360.0);
     let mut pos = start;
     let enemy_speed = 120.0;
-    let ememy_start = vec2(100.0, 100.0);
-    let mut enemy = ememy_start;
+    let enemy_start = vec2(100.0, 100.0);
+    let mut enemy = enemy_start;
     let mut enemy_alive = true;
     let mut sandy_left: f32 = 0.0;
     let mut cooldown: f32 = 0.0;
@@ -34,7 +39,7 @@ async fn main() {
     let mut blocker_timer: f32 = 5.0;
     let mut kills = 0;
     let mut respawn_timer = 0.0;
-    let mut floor = 9;
+    let mut floor = 1;
     let mut floor_kills = 0;
     let hit_sound = load_sound("assets/hit.wav").await.unwrap();
     let sandy_sound = load_sound("assets/sandy.wav").await.unwrap();
@@ -48,6 +53,7 @@ async fn main() {
     let mut dash_dir = vec2(0.0, 0.0);
     let pickup_sound = load_sound("assets/pick.wav").await.unwrap();
     let whosh_sound = load_sound("assets/whosh.wav").await.unwrap();
+    let mut selected: usize = 0;
     play_sound(
         &music,
         PlaySoundParams {
@@ -59,46 +65,106 @@ async fn main() {
     loop {
         if state == State::Menu {
             clear_background(BLACK);
+
             let title = "CYBERPSYCHO";
-            let sub = "Press ENTER to start";
+            let tw = measure_text(title, None, 90, 1.0).width;
+            draw_text(
+                title,
+                (screen_width() - tw) / 2.0 + 4.0,
+                224.0,
+                90.0,
+                MAGENTA,
+            );
+            draw_text(title, (screen_width() - tw) / 2.0, 220.0, 90.0, SKYBLUE);
+
+            let items = ["Start", "Controls", "Quit"];
+
+            if is_key_pressed(KeyCode::Down) || is_key_pressed(KeyCode::S) {
+                selected = (selected + 1) % items.len();
+            }
+            if is_key_pressed(KeyCode::Up) || is_key_pressed(KeyCode::W) {
+                selected = (selected + items.len() - 1) % items.len();
+            }
+
+            let mut y = 360.0;
+            for (i, item) in items.iter().enumerate() {
+                let label = if i == selected {
+                    format!("> {} <", item)
+                } else {
+                    item.to_string()
+                };
+                let color = if i == selected { WHITE } else { GRAY };
+                let w = measure_text(&label, None, 50, 1.0).width;
+                draw_text(&label, (screen_width() - w) / 2.0, y, 50.0, color);
+                y += 70.0;
+            }
+
+            if is_key_pressed(KeyCode::Enter) {
+                if selected == 0 {
+                    state = State::Playing;
+                } else if selected == 1 {
+                    state = State::Controls;
+                } else {
+                    break;
+                }
+            }
+
+            next_frame().await;
+            continue;
+        }
+
+        if state == State::Controls {
+            clear_background(BLACK);
+
+            let header = "CONTROLS";
+            let hw = measure_text(header, None, 70, 1.0).width;
+            draw_text(header, (screen_width() - hw) / 2.0, 150.0, 70.0, SKYBLUE);
+
             let lines = [
                 "WASD - move",
                 "Mouse aim + LMB - strike",
                 "SPACE - dash",
                 "SHIFT - Sandevistan (uses a blocker)",
-                "Escape - Leave - Menu",
+                "P - pause",
             ];
-            let mut y = 470.0;
+            let mut y = 260.0;
             for line in lines {
-                let w = measure_text(line, None, 28, 1.0).width;
-                draw_text(line, (screen_width() - w) / 2.0, y, 28.0, DARKGRAY);
-                y += 34.0;
+                let w = measure_text(line, None, 32, 1.0).width;
+                draw_text(line, (screen_width() - w) / 2.0, y, 32.0, LIGHTGRAY);
+                y += 45.0;
             }
-            let warn = "No blocker = Cyberpsychosis!";
-            let ww = measure_text(warn, None, 28, 1.0).width;
-            draw_text(warn, (screen_width() - ww) / 2.0, y + 10.0, 28.0, RED);
-            let w1 = measure_text(title, None, 90, 1.0).width;
-            let w2 = measure_text(sub, None, 40, 1.0).width;
 
-            draw_text(title, (screen_width() - w1) / 2.0, 324.0, 90.0, MAGENTA);
-            draw_text(title, (screen_width() - w1) / 2.0, 320.0, 90.0, SKYBLUE);
-            let pulse = 0.5 + 0.5 * (get_time() as f32 * 3.0).sin();
-            draw_text(
-                sub,
-                (screen_width() - w2) / 2.0,
-                390.0,
-                40.0,
-                Color::new(1.0, 1.0, 1.0, pulse),
-            );
-            if is_key_pressed(KeyCode::Enter) {
-                state = State::Playing;
+            let warn = "No blocker = Cyberpsychosis!";
+            let ww = measure_text(warn, None, 32, 1.0).width;
+            draw_text(warn, (screen_width() - ww) / 2.0, y + 20.0, 32.0, RED);
+
+            let back = "ENTER - back";
+            let bw = measure_text(back, None, 28, 1.0).width;
+            draw_text(back, (screen_width() - bw) / 2.0, 640.0, 28.0, GRAY);
+
+            if is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::Escape) {
+                state = State::Menu;
             }
-            if is_key_pressed(KeyCode::Escape) {
-                break;
-            }
+
             next_frame().await;
             continue;
         }
+
+        if is_key_pressed(KeyCode::P) && !game_over {
+            if state == State::Playing {
+                state = State::Paused;
+            } else if state == State::Paused {
+                state = State::Playing;
+            }
+        }
+        if state == State::Paused {
+            let text = "PAUSED";
+            let w = measure_text(text, None, 80, 1.0).width;
+            draw_text(text, (screen_width() - w) / 2.0, 360.0, 80.0, WHITE);
+            next_frame().await;
+            continue;
+        }
+
         let mut dir = vec2(0.0, 0.0);
         let enemy_time = if sandy_left > 0.0 { 0.2 } else { 1.0 };
         let dt = get_frame_time();
@@ -238,21 +304,33 @@ async fn main() {
             }
             game_over = false;
             pos = start;
-            enemy = ememy_start;
+            enemy = enemy_start;
             enemy_alive = true;
             sandy_left = 0.0;
             cooldown = 0.0;
             kills = 0;
             blockers = 0;
+            blocker_on_map = false;
+            blocker_timer = 5.0;
             floor = 1;
             floor_kills = 0;
             respawn_timer = 0.0;
-            stop_sound(&death_sound);
             banner = 0.0;
-            stop_sound(&boss_music);
+            flash = 0.0;
             dash_left = 0.0;
             dash_cd = 0.0;
+            stop_sound(&death_sound);
+            stop_sound(&boss_music);
+            stop_sound(&music);
+            play_sound(
+                &music,
+                PlaySoundParams {
+                    looped: true,
+                    volume: 0.5,
+                },
+            );
         }
+
         clear_background(BLACK);
         draw_circle(pos.x, pos.y, 15.0, SKYBLUE);
         draw_circle(mouse_position().0, mouse_position().1, 8.0, RED);
