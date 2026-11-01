@@ -1,3 +1,5 @@
+use std::os::unix::process;
+
 use macroquad::audio::{PlaySoundParams, load_sound, play_sound, play_sound_once, stop_sound};
 use macroquad::prelude::*;
 
@@ -17,6 +19,10 @@ enum State {
     Controls,
     Playing,
     Paused,
+}
+enum DeathCause {
+    Enemy,
+    Cyberpsychosis,
 }
 
 #[macroquad::main(window_conf)]
@@ -54,6 +60,14 @@ async fn main() {
     let pickup_sound = load_sound("assets/pick.wav").await.unwrap();
     let whosh_sound = load_sound("assets/whosh.wav").await.unwrap();
     let mut selected: usize = 0;
+    let player_tex = load_texture("assets/player.png").await.unwrap();
+    let player_sheet = load_texture("assets/sheet.png").await.unwrap();
+    player_sheet.set_filter(FilterMode::Nearest);
+    let frames = 4.0;
+    let mut attack_t = 0.0;
+    let enemy_tex = load_texture("assets/enemy.png").await.unwrap();
+    enemy_tex.set_filter(FilterMode::Nearest);
+    player_tex.set_filter(FilterMode::Nearest);
     play_sound(
         &music,
         PlaySoundParams {
@@ -170,7 +184,7 @@ async fn main() {
         let dt = get_frame_time();
         let was_over = game_over;
         let boss = floor >= 10;
-        let enemy_radius = if boss { 45.0 } else { 15.0 };
+        let enemy_radius = if boss { 60.0 } else { 22.0 };
         if banner > 0.0 {
             banner -= dt;
         }
@@ -182,6 +196,9 @@ async fn main() {
         }
         if dash_cd > 0.0 {
             dash_cd -= dt;
+        }
+        if attack_t > 0.0 {
+            attack_t -= dt;
         }
 
         if !blocker_on_map {
@@ -236,31 +253,29 @@ async fn main() {
             dash_dir = aim;
             play_sound_once(&whosh_sound);
         }
-
-        if is_mouse_button_pressed(MouseButton::Left)
-            && enemy_alive
-            && !boss
-            && pos.distance(enemy) < 60.0
-            && aim.dot(to_enemy) > 0.5
-        {
-            enemy_alive = false;
-            kills += 1;
-            play_sound_once(&hit_sound);
-            respawn_timer = 2.0;
-            floor_kills += 1;
-            if floor_kills >= 10 {
-                floor += 1;
-                floor_kills = 0;
-                banner = 2.0;
-                if floor == 10 {
-                    stop_sound(&music);
-                    play_sound(
-                        &boss_music,
-                        PlaySoundParams {
-                            looped: true,
-                            volume: 0.5,
-                        },
-                    );
+        let clicked = is_mouse_button_pressed(MouseButton::Left) && attack_t <= 0.0 && !game_over;
+        if clicked {
+            attack_t = 0.3;
+            if enemy_alive && !boss && pos.distance(enemy) < 80.0 && aim.dot(to_enemy) > 0.5 {
+                enemy_alive = false;
+                kills += 1;
+                play_sound_once(&hit_sound);
+                respawn_timer = 2.0;
+                floor_kills += 1;
+                if floor_kills >= 10 {
+                    floor += 1;
+                    floor_kills = 0;
+                    banner = 2.0;
+                    if floor == 10 {
+                        stop_sound(&music);
+                        play_sound(
+                            &boss_music,
+                            PlaySoundParams {
+                                looped: true,
+                                volume: 0.5,
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -282,8 +297,8 @@ async fn main() {
             } else {
                 pos += dir * speed * get_frame_time();
             }
-            pos.x = pos.x.clamp(15.0, screen_width() - 15.0);
-            pos.y = pos.y.clamp(15.0, screen_height() - 15.0);
+            pos.x = pos.x.clamp(22.0, screen_width() - 22.0);
+            pos.y = pos.y.clamp(22.0, screen_height() - 22.0);
             if enemy_alive {
                 let current_speed =
                     enemy_speed + floor as f32 * 12.0 + if boss { 80.0 } else { 0.0 };
@@ -291,7 +306,7 @@ async fn main() {
                 enemy += to_player * current_speed * get_frame_time() * enemy_time;
             }
         }
-        if enemy_alive && pos.distance(enemy) < 15.0 + enemy_radius {
+        if enemy_alive && pos.distance(enemy) < 22.0 + enemy_radius {
             game_over = true;
         }
         if game_over && !was_over {
@@ -332,14 +347,45 @@ async fn main() {
         }
 
         clear_background(BLACK);
-        draw_circle(pos.x, pos.y, 15.0, SKYBLUE);
+        let angle = aim.y.atan2(aim.x);
+        let frame = if attack_t > 0.0 {
+            let progress = 1.0 - attack_t / 0.3;
+            (1.0 + (progress * (frames - 1.0)).floor()).min(frames - 1.0)
+        } else {
+            0.0
+        };
+        draw_texture_ex(
+            &player_sheet,
+            pos.x - 48.0,
+            pos.y - 48.0,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(vec2(96.0, 96.0)),
+                source: Some(Rect::new(frame * 48.0, 0.0, 48.0, 48.0)),
+                rotation: angle,
+                ..Default::default()
+            },
+        );
         draw_circle(mouse_position().0, mouse_position().1, 8.0, RED);
         let ready = 1.0 - cooldown / 15.0;
         draw_rectangle(15.0, 690.0, 200.0 * ready, 12.0, SKYBLUE);
         draw_text("Sandevistan", 20.0, 670.0, 35.0, GREEN);
         if enemy_alive {
-            let color = if boss { PURPLE } else { YELLOW };
-            draw_circle(enemy.x, enemy.y, enemy_radius, color);
+            let look = (pos - enemy).normalize_or_zero();
+            let enemy_angle = look.y.atan2(look.x);
+            let size = if boss { 192.0 } else { 96.0 };
+            let tint = if boss { PURPLE } else { WHITE };
+            draw_texture_ex(
+                &enemy_tex,
+                enemy.x - size / 2.0,
+                enemy.y - size / 2.0,
+                tint,
+                DrawTextureParams {
+                    dest_size: Some(vec2(size, size)),
+                    rotation: enemy_angle,
+                    ..Default::default()
+                },
+            );
         }
         if game_over {
             let title = "Cyberpsychosis";
