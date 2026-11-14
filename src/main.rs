@@ -26,7 +26,6 @@ struct Enemy {
 struct Ghost {
     pos: Vec2,
     angle: f32,
-    life: f32,
 }
 struct Blood {
     pos: Vec2,
@@ -42,12 +41,17 @@ struct Popup {
     text: String,
     life: f32,
 }
+struct Corpse {
+    pos: Vec2,
+    angle: f32,
+}
 #[macroquad::main(window_conf)]
 async fn main() {
     let speed: f32 = 250.0;
     let mut game_over = false;
     let start = vec2(640.0, 360.0);
     let mut pos = start;
+
     let enemy_speed: f32 = 120.0;
     let mut sandy_left: f32 = 0.0;
     let mut cooldown: f32 = 0.0;
@@ -63,13 +67,26 @@ async fn main() {
     let mut enemies: Vec<Enemy> = Vec::new();
     let mut particles: Vec<Particle> = Vec::new();
     let mut head_exploded = false;
+    let boss_tex = load_texture("assets/boss.png").await.unwrap();
+    boss_tex.set_filter(FilterMode::Nearest);
     let mut spawn_timer: f32 = 1.0;
     let mut floor: i32 = 1;
     let mut blood: Vec<Blood> = Vec::new();
+    let elevator_tex = load_texture("assets/elevator.png").await.unwrap();
+    elevator_tex.set_filter(FilterMode::Nearest);
+    let elevator_frames = (elevator_tex.width() / 192.0).floor();
     let mut popups: Vec<Popup> = Vec::new();
     let mut floor_kills: i32 = 0;
+    let mut elevator_open = false;
+    let mut elevator_anim = 0.0;
+    let elevator_pos = vec2(640.0, 100.0);
     let mut ghosts: Vec<Ghost> = Vec::new();
+    let mut in_cutscene = false;
+    let mut cutscene_t = 0.0;
+    let mut fade_in = 0.0;
     let mut ghost_timer: f32 = 0.0;
+    let ghost_life = 1.5;
+    let mut last_ghost_pos = pos;
     let mut banner: f32 = 0.0;
     let mut flash: f32 = 0.0;
     let mut dash_left: f32 = 0.0;
@@ -78,10 +95,17 @@ async fn main() {
     let mut selected: usize = 0;
     let mut attack_t: f32 = 0.0;
     let mut walk_t: f32 = 0.0;
+    let mut enemy_anim = 0.0;
     let mut death_t: f32 = 0.0;
     let mut death_angle: f32 = 0.0;
     let mut hitstop: f32 = 0.0;
     let mut psycho = 0.0;
+    let mut corpses: Vec<Corpse> = Vec::new();
+    let corpse_tex = load_texture("assets/enemy_dead.png").await.unwrap();
+    corpse_tex.set_filter(FilterMode::Nearest);
+    let enemy_walk = load_texture("assets/enemy_walk.png").await.unwrap();
+    enemy_walk.set_filter(FilterMode::Nearest);
+    let enemy_walk_frames = 5.0;
     let crosshair = load_texture("assets/crosshair.png").await.unwrap();
     crosshair.set_filter(FilterMode::Nearest);
     let crosshair_red = load_texture("assets/crosshair_red.png").await.unwrap();
@@ -104,7 +128,7 @@ async fn main() {
 
     let walk_sheet = load_texture("assets/walk.png").await.unwrap();
     walk_sheet.set_filter(FilterMode::Nearest);
-    let walk_frames: f32 = 4.0;
+    let walk_frames: f32 = 6.0;
 
     let death_sheet = load_texture("assets/death.png").await.unwrap();
     death_sheet.set_filter(FilterMode::Nearest);
@@ -147,6 +171,8 @@ async fn main() {
                 90.0,
                 MAGENTA,
             );
+            let nighttitle = "NIGHT CITY, 2075";
+            draw_text(nighttitle, 550.0, 270.0, 30.0, GRAY);
             draw_text(title, (screen_width() - tw) / 2.0, 220.0, 90.0, SKYBLUE);
 
             let items = ["Start", "Controls", "Quit"];
@@ -260,6 +286,13 @@ async fn main() {
         if flash > 0.0 {
             flash -= dt;
         }
+        if elevator_open && elevator_anim < elevator_frames {
+            elevator_anim += dt * 10.0;
+        }
+        if fade_in > 0.0 {
+            fade_in -= dt;
+        }
+        enemy_anim += dt * enemy_time;
         // particles
         for p in particles.iter_mut() {
             p.pos += p.vel * dt;
@@ -357,26 +390,30 @@ async fn main() {
         }
 
         let aim = (Vec2::from(mouse_position()) - pos).normalize_or_zero();
-
         // ghosts
-        if sandy_left > 0.0 && !game_over {
-            ghost_timer -= dt;
-            if ghost_timer <= 0.0 {
-                ghosts.push(Ghost {
-                    pos,
-                    angle: aim.y.atan2(aim.x),
-                    life: 0.4,
-                });
-                ghost_timer = 0.04;
+        if sandy_left > 0.0 && !game_over && pos.distance(last_ghost_pos) > 30.0 {
+            ghosts.push(Ghost {
+                pos,
+                angle: aim.y.atan2(aim.x),
+            });
+            last_ghost_pos = pos;
+            if ghosts.len() > 60 {
+                ghosts.remove(0);
             }
         }
-        for g in ghosts.iter_mut() {
-            g.life -= dt;
+        if sandy_left <= 0.0 && !ghosts.is_empty() {
+            let target = if ghosts.len() > 1 { ghosts[1].pos } else { pos };
+            let dist = (target - ghosts[0].pos).length();
+            let step = 1200.0 * dt;
+            if dist <= step {
+                ghosts.remove(0);
+            } else {
+                let dir = (target - ghosts[0].pos) / dist;
+                ghosts[0].pos += dir * step;
+            }
         }
-        ghosts.retain(|g| g.life > 0.0);
-
         // dash
-        if is_key_pressed(KeyCode::Space) && dash_cd <= 0.0 && !game_over {
+        if is_key_pressed(KeyCode::Space) && dash_cd <= 0.0 && !game_over && !in_cutscene {
             dash_left = 0.15;
             dash_cd = 1.5;
             dash_dir = aim;
@@ -384,7 +421,10 @@ async fn main() {
         }
 
         // attack
-        let clicked = is_mouse_button_pressed(MouseButton::Left) && attack_t <= 0.0 && !game_over;
+        let clicked = is_mouse_button_pressed(MouseButton::Left)
+            && attack_t <= 0.0
+            && !game_over
+            && !in_cutscene;
         if clicked {
             attack_t = 0.3;
             if !boss {
@@ -393,6 +433,11 @@ async fn main() {
                     let to_e = (e.pos - pos).normalize_or_zero();
                     let hit = pos.distance(e.pos) < 80.0 && aim.dot(to_e) > 0.5;
                     if hit {
+                        let look = (pos - e.pos).normalize_or_zero();
+                        corpses.push(Corpse {
+                            pos: e.pos,
+                            angle: look.y.atan2(look.x),
+                        });
                         for _ in 0..6 {
                             blood.push(Blood {
                                 pos: e.pos
@@ -416,20 +461,8 @@ async fn main() {
                     play_sound_once(&hit_sound);
 
                     if floor_kills >= 10 {
-                        floor += 1;
-                        floor_kills = 0;
-                        banner = 2.0;
-                        if floor == 10 {
-                            enemies.clear();
-                            stop_sound(&music);
-                            play_sound(
-                                &boss_music,
-                                PlaySoundParams {
-                                    looped: true,
-                                    volume: 0.5,
-                                },
-                            );
-                        }
+                        elevator_open = true;
+                        enemies.clear();
                     }
                 }
             }
@@ -438,8 +471,11 @@ async fn main() {
         if blood.len() > 300 {
             blood.drain(0..50);
         }
+        if corpses.len() > 30 {
+            corpses.remove(0);
+        }
         // spawn
-        if !game_over {
+        if !game_over && !elevator_open {
             let max_enemies = if boss { 1 } else { 1 + floor as usize / 2 };
             if enemies.len() < max_enemies {
                 spawn_timer -= dt;
@@ -458,14 +494,14 @@ async fn main() {
         }
 
         // motion
-        if !game_over {
+        if !game_over && !in_cutscene {
             if dash_left > 0.0 {
                 pos += dash_dir * speed * 4.0 * dt;
             } else {
                 pos += dir * speed * dt;
             }
-            pos.x = pos.x.clamp(22.0, screen_width() - 22.0);
-            pos.y = pos.y.clamp(22.0, screen_height() - 22.0);
+            pos.x = pos.x.clamp(130.0, 1150.0);
+            pos.y = pos.y.clamp(110.0, 630.0);
 
             let current_speed = enemy_speed + floor as f32 * 12.0 + if boss { 80.0 } else { 0.0 };
             for e in enemies.iter_mut() {
@@ -474,6 +510,16 @@ async fn main() {
             }
         }
 
+        // elevator enter
+        if elevator_open
+            && !in_cutscene
+            && !game_over
+            && elevator_anim >= elevator_frames - 1.0
+            && pos.distance(elevator_pos) < 70.0
+        {
+            in_cutscene = true;
+            cutscene_t = 0.0;
+        }
         // collision
         if !game_over
             && enemies
@@ -503,6 +549,36 @@ async fn main() {
         if game_over {
             death_t += dt;
         }
+        // cutscene
+        if in_cutscene {
+            cutscene_t += raw_dt;
+            if cutscene_t >= 3.0 {
+                in_cutscene = false;
+                cutscene_t = 0.0;
+                elevator_open = false;
+                elevator_anim = 0.0;
+                floor += 1;
+                fade_in = 1.0;
+                floor_kills = 0;
+                pos = start;
+                banner = 2.0;
+                blood.clear();
+                corpses.clear();
+                ghosts.clear();
+                spawn_timer = 1.0;
+                if floor == 10 {
+                    enemies.clear();
+                    stop_sound(&music);
+                    play_sound(
+                        &boss_music,
+                        PlaySoundParams {
+                            looped: true,
+                            volume: 0.5,
+                        },
+                    );
+                }
+            }
+        }
 
         // restart
         if game_over && (is_key_pressed(KeyCode::R) || is_key_pressed(KeyCode::Escape)) {
@@ -510,6 +586,8 @@ async fn main() {
                 state = State::Menu;
             }
             game_over = false;
+            in_cutscene = false;
+            cutscene_t = 0.0;
             pos = start;
             sandy_left = 0.0;
             cooldown = 0.0;
@@ -533,9 +611,11 @@ async fn main() {
             combo_timer = 0.0;
             psycho = 0.0;
             head_exploded = false;
+            fade_in = 0.0;
             particles.clear();
             blood.clear();
             popups.clear();
+            corpses.clear();
             stop_sound(&death_sound);
             stop_sound(&boss_music);
             stop_sound(&music);
@@ -568,15 +648,38 @@ async fn main() {
             let a = (p.life / 1.2).min(1.0);
             draw_circle(p.pos.x, p.pos.y, 5.0, Color::new(0.8, 0.0, 0.1, a));
         }
-
+        for c in &corpses {
+            draw_texture_ex(
+                &corpse_tex,
+                c.pos.x - 48.0,
+                c.pos.y - 48.0,
+                WHITE,
+                DrawTextureParams {
+                    dest_size: Some(vec2(96.0, 96.0)),
+                    rotation: c.angle,
+                    ..Default::default()
+                },
+            );
+        }
+        let elev_frame = elevator_anim.min(elevator_frames - 1.0).floor();
+        draw_texture_ex(
+            &elevator_tex,
+            elevator_pos.x - 96.0,
+            20.0,
+            WHITE,
+            DrawTextureParams {
+                dest_size: Some(vec2(192.0, 96.0)),
+                source: Some(Rect::new(elev_frame * 192.0, 0.0, 192.0, 96.0)),
+                ..Default::default()
+            },
+        );
         // afterimages
         for g in &ghosts {
-            let alpha = g.life / 0.4 * 0.5;
             draw_texture_ex(
                 &player_sheet,
                 g.pos.x - 48.0,
                 g.pos.y - 48.0,
-                Color::new(0.3, 0.8, 1.0, alpha),
+                Color::new(0.3, 0.8, 1.0, 0.5),
                 DrawTextureParams {
                     dest_size: Some(vec2(96.0, 96.0)),
                     source: Some(Rect::new(0.0, 0.0, 48.0, 48.0)),
@@ -626,19 +729,33 @@ async fn main() {
         for e in &enemies {
             let look = (pos - e.pos).normalize_or_zero();
             let enemy_angle = look.y.atan2(look.x);
-            let size = if boss { 192.0 } else { 96.0 };
-            let tint = if boss { PURPLE } else { WHITE };
-            draw_texture_ex(
-                &enemy_tex,
-                e.pos.x - size / 2.0,
-                e.pos.y - size / 2.0,
-                tint,
-                DrawTextureParams {
-                    dest_size: Some(vec2(size, size)),
-                    rotation: enemy_angle,
-                    ..Default::default()
-                },
-            );
+            if boss {
+                draw_texture_ex(
+                    &boss_tex,
+                    e.pos.x - 96.0,
+                    e.pos.y - 96.0,
+                    WHITE,
+                    DrawTextureParams {
+                        dest_size: Some(vec2(192.0, 192.0)),
+                        rotation: enemy_angle,
+                        ..Default::default()
+                    },
+                );
+            } else {
+                let frame = ((enemy_anim * 8.0) as usize % enemy_walk_frames as usize) as f32;
+                draw_texture_ex(
+                    &enemy_walk,
+                    e.pos.x - 48.0,
+                    e.pos.y - 48.0,
+                    WHITE,
+                    DrawTextureParams {
+                        dest_size: Some(vec2(96.0, 96.0)),
+                        source: Some(Rect::new(frame * 48.0, 0.0, 48.0, 48.0)),
+                        rotation: enemy_angle,
+                        ..Default::default()
+                    },
+                );
+            }
         }
 
         // chip
@@ -715,6 +832,21 @@ async fn main() {
             draw_text(&format!("COMBO x{}", combo), 20.0, 90.0, 40.0, ORANGE);
         }
         draw_text(&format!("Floor: {}/10", floor), 1080.0, 30.0, 30.0, WHITE);
+        if in_cutscene {
+            let a = (cutscene_t / 1.0).min(1.0);
+            draw_rectangle(
+                0.0,
+                0.0,
+                screen_width(),
+                screen_height(),
+                Color::new(0.0, 0.0, 0.0, a),
+            );
+            if cutscene_t > 1.0 {
+                let text = format!("FLOOR {}", floor + 1);
+                let w = measure_text(&text, None, 90, 1.0).width;
+                draw_text(&text, (screen_width() - w) / 2.0, 360.0, 90.0, WHITE);
+            }
+        }
 
         // effects
         if sandy_left > 0.0 {
@@ -740,6 +872,17 @@ async fn main() {
                 Color::new(1.0, 0.0, 0.0, flash / 0.6 * 0.5),
             );
         }
+        // fade
+        if fade_in > 0.0 {
+            draw_rectangle(
+                0.0,
+                0.0,
+                screen_width(),
+                screen_height(),
+                Color::new(0.0, 0.0, 0.0, fade_in),
+            );
+        }
+
         if game_over && death_t > 1.0 {
             let title = "Cyberpsychosis";
             let sub = "R - restart   ESC - menu";
