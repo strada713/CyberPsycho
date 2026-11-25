@@ -18,9 +18,23 @@ enum State {
     Playing,
     Paused,
 }
+#[derive(Clone, Copy)]
 
+enum EnemyKind {
+    Grunt,
+    Runner,
+}
+impl EnemyKind {
+    fn speed_mul(self) -> f32 {
+        match self {
+            EnemyKind::Grunt => 1.0,
+            EnemyKind::Runner => 1.8,
+        }
+    }
+}
 struct Enemy {
     pos: Vec2,
+    kind: EnemyKind,
 }
 
 struct Ghost {
@@ -70,7 +84,7 @@ async fn main() {
     let boss_tex = load_texture("assets/boss.png").await.unwrap();
     boss_tex.set_filter(FilterMode::Nearest);
     let mut spawn_timer: f32 = 1.0;
-    let mut floor: i32 = 1;
+    let mut floor: i32 = 3;
     let mut blood: Vec<Blood> = Vec::new();
     let elevator_tex = load_texture("assets/elevator.png").await.unwrap();
     elevator_tex.set_filter(FilterMode::Nearest);
@@ -84,8 +98,6 @@ async fn main() {
     let mut in_cutscene = false;
     let mut cutscene_t = 0.0;
     let mut fade_in = 0.0;
-    let mut ghost_timer: f32 = 0.0;
-    let ghost_life = 1.5;
     let mut last_ghost_pos = pos;
     let mut banner: f32 = 0.0;
     let mut flash: f32 = 0.0;
@@ -95,6 +107,9 @@ async fn main() {
     let mut selected: usize = 0;
     let mut attack_t: f32 = 0.0;
     let mut walk_t: f32 = 0.0;
+    let runner_walk = load_texture("assets/enemy_walk2.png").await.unwrap();
+    runner_walk.set_filter(FilterMode::Nearest);
+    let runner_frames: f32 = (runner_walk.width() / 48.0).floor();
     let mut enemy_anim = 0.0;
     let mut death_t: f32 = 0.0;
     let mut death_angle: f32 = 0.0;
@@ -485,8 +500,14 @@ async fn main() {
                     } else {
                         1300.0
                     };
+                    let kind = if floor >= 3 && rand::gen_range(0, 3) == 0 {
+                        EnemyKind::Runner
+                    } else {
+                        EnemyKind::Grunt
+                    };
                     enemies.push(Enemy {
                         pos: vec2(x, rand::gen_range(0.0, 720.0)),
+                        kind,
                     });
                     spawn_timer = 2.0;
                 }
@@ -506,7 +527,7 @@ async fn main() {
             let current_speed = enemy_speed + floor as f32 * 12.0 + if boss { 80.0 } else { 0.0 };
             for e in enemies.iter_mut() {
                 let to_player = (pos - e.pos).normalize_or_zero();
-                e.pos += to_player * current_speed * dt * enemy_time;
+                e.pos += to_player * current_speed * dt * enemy_time * e.kind.speed_mul();
             }
         }
 
@@ -742,9 +763,13 @@ async fn main() {
                     },
                 );
             } else {
-                let frame = ((enemy_anim * 8.0) as usize % enemy_walk_frames as usize) as f32;
+                let (tex, count) = match e.kind {
+                    EnemyKind::Grunt => (&enemy_walk, enemy_walk_frames),
+                    EnemyKind::Runner => (&runner_walk, runner_frames),
+                };
+                let frame = ((enemy_anim * 8.0) as usize % count as usize) as f32;
                 draw_texture_ex(
-                    &enemy_walk,
+                    tex,
                     e.pos.x - 48.0,
                     e.pos.y - 48.0,
                     WHITE,
